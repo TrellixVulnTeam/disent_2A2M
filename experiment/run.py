@@ -314,23 +314,29 @@ def action_train(cfg: DictConfig):
     datamodule = hydra_make_datamodule(cfg)
     framework = hydra_create_framework(cfg, gpu_batch_augment=datamodule.gpu_batch_augment)
 
+    # collect all the callbacks
+    trainer_callbacks = [
+        *hydra_get_callbacks(cfg),
+        *hydra_get_checkpoint_callbacks(cfg),
+        *hydra_get_metric_callbacks(cfg),
+        ModelSummary(max_depth=2),  # override default ModelSummary
+    ]
+    enable_checkpointing = cfg.settings.checkpoint.save_checkpoint or any(
+        isinstance(c, ModelCheckpoint) for c in trainer_callbacks
+    )
+
     # trainer default kwargs
     # Setup Trainer
     trainer = set_debug_trainer(pl.Trainer(
         # cannot override these
         logger=logger,
         gpus=gpus,
-        callbacks=[
-            *hydra_get_callbacks(cfg),
-            *hydra_get_checkpoint_callbacks(cfg),
-            *hydra_get_metric_callbacks(cfg),
-            ModelSummary(max_depth=2),  # override default ModelSummary
-        ],
+        callbacks=trainer_callbacks,
         # additional kwargs from the config
         **{
             **dict(
                 detect_anomaly=False,        # this should only be enabled for debugging torch and finding NaN values, slows down execution, not by much though?
-                enable_checkpointing=cfg.settings.checkpoint.save_checkpoint,
+                enable_checkpointing=enable_checkpointing,
             ),
             **cfg.trainer,  # overrides
         }

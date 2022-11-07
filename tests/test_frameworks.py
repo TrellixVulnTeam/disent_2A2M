@@ -24,7 +24,6 @@
 
 import pickle
 from dataclasses import asdict
-from functools import partial
 
 import pytest
 import pytorch_lightning as pl
@@ -44,14 +43,15 @@ from disent.model import AutoEncoder
 from disent.model.ae import DecoderLinear
 from disent.model.ae import EncoderLinear
 from disent.dataset.transform import ToImgTensorF32
+from disent.util.function import wrapped_partial
+from disent.util.seeds import seed
+from docs.examples.extend_experiment.code.weaklysupervised__si_adavae import SwappedInputAdaVae
+from docs.examples.extend_experiment.code.weaklysupervised__si_betavae import SwappedInputBetaVae
+
 
 # ========================================================================= #
 # TEST FRAMEWORKS                                                           #
 # ========================================================================= #
-from disent.util.seeds import seed
-from disent.util.seeds import TempNumpySeed
-from docs.examples.extend_experiment.code.weaklysupervised__si_adavae import SwappedInputAdaVae
-from docs.examples.extend_experiment.code.weaklysupervised__si_betavae import SwappedInputBetaVae
 
 
 _TEST_FRAMEWORKS = [
@@ -74,7 +74,7 @@ _TEST_FRAMEWORKS = [
     (DipVae,               dict(dip_mode='i'),                                                          XYObjectData),
     (InfoVae,              dict(),                                                                      XYObjectData),
     (DfcVae,               dict(),                                                                      XYObjectData),
-    (DfcVae,               dict(),                                                                      partial(XYObjectData, rgb=False)),
+    (DfcVae,               dict(),                                                                      wrapped_partial(XYObjectData, rgb=False)),
     (BetaTcVae,            dict(),                                                                      XYObjectData),
     # VAE - unsupervised - EXP
     (DataOverlapTripletVae,dict(overlap_mine_triplet_mode='none'),                                      XYObjectData),
@@ -96,7 +96,7 @@ _TEST_FRAMEWORKS = [
 
 
 @pytest.mark.parametrize(['Framework', 'cfg_kwargs', 'Data'], _TEST_FRAMEWORKS)
-def test_frameworks(Framework, cfg_kwargs, Data):
+def test_frameworks_and_checkpointing(Framework, cfg_kwargs, Data, tmp_path):
     DataSampler = {
         1: GroundTruthSingleSampler,
         2: GroundTruthPairSampler,
@@ -119,54 +119,32 @@ def test_frameworks(Framework, cfg_kwargs, Data):
     pickle.dumps(framework)
 
     # train!
-    trainer = pl.Trainer(logger=False, checkpoint_callback=False, max_steps=256, fast_dev_run=True)
+    trainer = pl.Trainer(
+        callbacks=[ModelCheckpoint(dirpath=tmp_path, save_last=True)],
+        fast_dev_run=False,
+        logger=False,
+        max_steps=4,
+    )
     trainer.fit(framework, dataloader)
 
     # test pickling after training, something may have changed!
     pickle.dumps(framework)
 
-
-
-@pytest.mark.parametrize(['Framework', 'cfg_kwargs', 'Data'], _TEST_FRAMEWORKS)
-def test_framework_checkpointing(Framework, cfg_kwargs, Data, tmp_path):
-    DataSampler = {
-        1: GroundTruthSingleSampler,
-        2: GroundTruthPairSampler,
-        3: GroundTruthTripleSampler,
-    }[Framework.REQUIRED_OBS]
-
-    data = XYObjectData() if (Data is None) else Data()
-    dataset = DisentDataset(data, DataSampler(), transform=ToImgTensorF32())
-    dataloader = DataLoader(dataset=dataset, batch_size=4, shuffle=True, num_workers=0)
-
-    framework = Framework(
-        model=AutoEncoder(
-            encoder=EncoderLinear(x_shape=data.x_shape, z_size=6, z_multiplier=2 if issubclass(Framework, Vae) else 1),
-            decoder=DecoderLinear(x_shape=data.x_shape, z_size=6),
-        ),
-        cfg=Framework.cfg(**cfg_kwargs)
-    )
-
-    # save checkpoints during fit()
-    cpk = ModelCheckpoint(dirpath=tmp_path, save_last=True)
-
-    # train!
-    trainer = pl.Trainer(default_root_dir=tmp_path, enable_checkpointing=True, callbacks=[cpk], max_steps=2, fast_dev_run=False)
-
-    framework.hparams.update(cfg_kwargs)
-    if trainer.logger:
-        trainer.logger.log_hyperparams(framework.hparams)
-
-    trainer.fit(framework, dataloader)
-
-    # load checkpoint
+    # load checkpoints
     checkpoints = list(tmp_path.glob("*.ckpt"))
     assert len(checkpoints) == 2
     for c in checkpoints:
         framework_checkpoint = Framework.load_from_checkpoint(c)
         assert isinstance(framework_checkpoint, Framework)
 
-
+    # continue training
+    trainer = pl.Trainer(
+        enable_checkpointing=False,
+        fast_dev_run=False,
+        logger=False,
+        max_steps=1,
+    )
+    trainer.fit(framework_checkpoint, dataloader)
 
 
 @pytest.mark.parametrize(['Framework', 'cfg_kwargs', 'Data'], _TEST_FRAMEWORKS)

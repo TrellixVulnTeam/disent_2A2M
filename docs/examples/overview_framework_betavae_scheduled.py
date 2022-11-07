@@ -30,5 +30,5 @@ module.register_schedule('beta', CyclicSchedule(
 ))
 
 # train the model
-trainer = pl.Trainer(logger=False, checkpoint_callback=False, fast_dev_run=is_test_run())
+trainer = pl.Trainer(logger=False, enable_checkpointing=False, fast_dev_run=is_test_run())
 trainer.fit(module, dataloader)
